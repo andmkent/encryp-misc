@@ -1,6 +1,8 @@
-#lang racket
+#lang typed/racket
 
-(require rackunit)
+(require typed/rackunit)
+(require (for-syntax racket/syntax))
+(require (for-syntax syntax/parse))
 
 (provide (all-defined-out))
 
@@ -11,25 +13,45 @@
 ;;****************************************************
 
 ;;****************************************************
-;; GF+ : num ... -> num
+;; GF+ Integer ... -> Integer
 ;;****************************************************
-(define-syntax GF+
-  (syntax-rules ()
-    [(GF+ a ...) 
-     (bitwise-bit-field (bitwise-xor a ...) 
-                        0
-                        8)]))
+(: GF+ (Byte * -> Byte))
+(define (GF+ . xs)
+  (bitwise-bit-field
+   (foldl (λ: ([x : Byte] [y : Byte]) 
+            (bitwise-xor x y))
+          0
+          xs)
+   0
+   8))
 
 (check-equal? (GF+ #x57 #x83) #xd4)
 
+(define-syntax (build-static-vector stx)
+  (syntax-parse 
+   stx
+   [(_ size-expr:expr fun-expr:expr)
+    #`#,(syntax-local-eval 
+         #`(cond 
+             [(not (exact-nonnegative-integer? size-expr))
+              (raise-syntax-error 'build-static-vector "invalid upper bound" size-expr)]
+             [(not (procedure? fun-expr))
+              (raise-syntax-error 'build-static-vector "invalid builder proc" fun-expr)]
+             [else
+              (build-vector size-expr fun-expr)]))]))
+
 ;;****************************************************
-;; x* : num -> num
+;; x*
 ;;****************************************************
-(define (x* num)
-  (define n (bitwise-bit-field (* 2 num) 0 8))
-  (if (bitwise-bit-set? num 7)
-      (bitwise-xor n #x1b)
-      n))
+(: x* (Byte -> Byte))
+(define (x* b)
+  (define: vec : (Vectorof Byte) 
+    (build-static-vector 256 
+                         (λ (i) (let ([n (bitwise-bit-field (* 2 i) 0 8)])
+                                  (if (bitwise-bit-set? i 7)
+                                      (bitwise-xor n #x1b)
+                                      n)))))
+  (vector-ref vec b))
 
 
 (check-equal? (x* #x57) #xae)
@@ -37,42 +59,51 @@
 (check-equal? (x* (x* (x* #x57))) #x8e)
 
 ;;****************************************************
-;; bitlist : num -> list num
+;; num->bitlist
 ;;****************************************************
-; builds a list of which bits are 1's
-(define (bitlist bits ord)
-  (cond
-    [(zero? bits) empty]
-    [(odd? bits) (cons ord 
-                       (bitlist (quotient bits 2)
-                                (add1 ord)))]
-    [else
-     (bitlist (quotient bits 2)
-              (add1 ord))]))
+; builds a list of which bits are set to one 
+; in the given number
+(: num->bitlist (Integer -> (Listof Integer)))
+(define (num->bitlist num)
+  (: bitlist* (Integer Integer -> (Listof Integer)))
+  (define (bitlist* bits ord) 
+    (cond
+      [(zero? bits) 
+       empty]
+      [(odd? bits) 
+       (cons ord 
+             (bitlist* (quotient bits 2)
+                       (add1 ord)))]
+      [else
+       (bitlist* (quotient bits 2)
+                 (add1 ord))]))
+  (bitlist* num 0))
 
-(check-equal? (bitlist #x0 0) '())
-(check-equal? (bitlist #x13 0) '(0 1 4))
-(check-equal? (bitlist #xD4 0) '(2 4 6 7))
-
-;;****************************************************
-;; apply* : (X -> X) num -> X
-;;****************************************************
-(define (apply* f v i)
-  (if (zero? i)
-      v
-      (apply* f (f v) (sub1 i))))
-
-(check-equal? (apply* add1 0 0) 0)
-(check-equal? (apply* add1 0 2) 2)
-(check-equal? (apply* add1 0 3) 3)
+(check-equal? (num->bitlist #x0) '())
+(check-equal? (num->bitlist #x13) '(0 1 4))
+(check-equal? (num->bitlist #xD4) '(2 4 6 7))
 
 ;;****************************************************
-;; GF* : num -> list num
+;; repeat
 ;;****************************************************
+(: repeat (All (X) ((X -> X) X Integer -> X)))
+(define (repeat f x count)
+  (if (zero? count)
+      x
+      (repeat f (f x) (sub1 count))))
+
+(check-equal? (repeat add1 0 0) 0)
+(check-equal? (repeat add1 0 2) 2)
+(check-equal? (repeat add1 0 3) 3)
+
+;;****************************************************
+;; GF*
+;;****************************************************
+(: GF* (Byte Byte -> Byte))
 (define (GF* a b)
-  (foldr (λ (x y) (GF+ x y)) 
+  (foldl (λ: ([x : Byte] [y : Byte]) (GF+ x y)) 
          0 
-         (map (λ (xpow) (apply* x* a xpow))
-              (bitlist b 0))))
+         (map (λ: ([xpow : Integer]) (repeat x* a xpow))
+              (num->bitlist b))))
 
 (check-equal? (GF* #x57 #x83) #xc1)

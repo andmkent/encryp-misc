@@ -1,9 +1,7 @@
-#lang racket
+#lang typed/racket
 
-(require math/number-theory)
-(require math/matrix)
-(require rackunit)
-(require "ffarith.rkt")
+(require typed/rackunit)
+(require "typedffarith.rkt")
 
 
 ;;****************************************************
@@ -11,7 +9,13 @@
 ;; Utilities & misc for lists/bytes/hex/etc
 ;;******************************************************************************
 ;;****************************************************
-; pair-chars : list of chars -> list with pair char strings
+
+;;****************************************************
+; pair-chars
+(: pair-chars ((Listof Char) -> (Listof String)))
+; Takes a list of characters ['a', 'b', 'c', 'd', ....]
+; and returns list of paired characters:
+; ["ab", "cd", ...]
 (define (pair-chars l)
   (cond
     [(empty? l)
@@ -26,11 +30,23 @@
 (check-equal? (pair-chars (list #\a #\b #\c #\d))
               (list "ab" "cd"))
 
-; 0xbytes : hex-string -> list of hex bytes
+;;****************************************************
+; 0xbytes
+(: 0x (String -> (Listof Byte)))
+; Takes a hex string "ff1a..."
+; and turns it into a list of Bytes
+; [#xff, #x1a, ...]
 (define (0x str)
-  (map string->number 
-       (for/list ([c (pair-chars (string->list str))])
-         (string-append "#x" c))))
+  (define str-list (pair-chars (string->list str)))
+  (define hex-str-list (map (λ: ([x : String]) 
+                              (string-append "#x" x))
+                            str-list))
+  (map (λ: ([x : String ])
+         (let ([num (string->number x)])
+           (if (not (byte? num)) 
+               (error '0x "String produce non-byte")
+               num)))
+       hex-str-list))
 
 (check-equal? (0x "0102030405")
               (list 1 2 3 4 5))
@@ -38,16 +54,22 @@
 (check-equal? (0x "0a0b0c0d0e")
               (list #xa #xb #xc #xd #xe))
 
-; returns list from element ith -> j-1th 
-; [ith, ..., jth] (0 based)
+
+;;****************************************************
+; sublist
+(: sublist (All (X) ((Listof X) Integer Integer -> (Listof X))))
+; returns list from element ith -> j-1th
 (define (sublist l i j)
   (drop (take l j) i))
 
 (check-equal? (sublist (list 1) 0 1) (list 1))
 (check-equal? (sublist (list 1 2 3 4) 1 3) (list 2 3))
 
-; nth-word : list-of-bytes -> list of bytes 4 long
-; Extracts a "word" from a list of bytes
+
+;;****************************************************
+; nth-word
+(: nth-word (All (X) ((Listof X) Integer -> (Listof X))))
+; Extracts a word (e.g. list of 4 bytes) from a list of bytes
 (define (nth-word byte-list wnum)
   (sublist byte-list (* wnum 4) (* (add1 wnum) 4)))
 
@@ -64,35 +86,40 @@
                         1)
               (list 4 5 6 7))
 
+;;****************************************************
+; word-rev
+(: reverse-words ((Listof Byte) -> (Listof Byte)))
 ; Reverses a list of bytes on a word level
-(define (word-rev lob)
+(: reverse-words ((Listof Byte) -> (Listof Byte)))
+(define (reverse-words lob)
   (cond
     [(> (length lob) 4)
      (append (drop lob (- (length lob) 4))
-             (word-rev (take lob (- (length lob) 4))))]
+             (reverse-words (take lob (- (length lob) 4))))]
     [(= 4 (length lob))
      lob]
     [else
      (error 'word-rev "invalid length")]))
 
-(check-equal? (word-rev (list 1 2 3 4)) (list 1 2 3 4))
-(check-equal? (word-rev (list 1 2 3 4
-                              5 6 7 8)) 
+(check-equal? (reverse-words (list 1 2 3 4)) 
+              (list 1 2 3 4))
+(check-equal? (reverse-words (list 1 2 3 4
+                                   5 6 7 8)) 
               (list 5 6 7 8
                     1 2 3 4))
-(check-equal? (word-rev (list 1 2 3 4
-                              5 6 7 8
-                              9 10 11 12)) 
+(check-equal? (reverse-words (list 1 2  3  4
+                                   5 6  7  8
+                                   9 10 11 12)) 
               (list 9 10 11 12
-                    5 6 7 8
-                    1 2 3 4))
+                    5 6  7  8
+                    1 2  3  4))
 
 ;;****************************************************
 ;;******************************************************************************
 ;; AES Struct & Constants
 ;;******************************************************************************
 ;;****************************************************
-(struct AES (key)
+(struct: AES ([key : (Listof Byte)])
   #:guard (λ (key type-name)
             (if (and (andmap (λ (x) (< -1 x 256)) key)
                      (or (= (length key) 16)
@@ -105,20 +132,28 @@
 
 (define Nb 4)
 
+;;****************************************************
+; AES-Nk
+(: AES-Nk (AES -> Integer))
 (define (AES-Nk aes)
   (define len (length (AES-key aes)))
   (cond
     [(= len 16) 4]
     [(= len 24) 6]
     [(= len 32) 8]
-    [else AES-Nk (error "invalid key")]))
+    [else (error "invalid key")]))
 
+;;****************************************************
+; AES-Nr
+(: AES-Nr (AES -> Integer))
 (define (AES-Nr aes)
   (define Nk (AES-Nk aes))
   (cond
     [(= 4 Nk) 10]
     [(= 6 Nk) 12]
-    [(= 8 Nk) 14]))
+    [(= 8 Nk) 14]
+    [else
+     (error 'AES-Nr "Invalid Nk ~a" Nk)]))
 
 (check-equal? (AES-Nk (AES (list #x2b #x7e #x15 #x16 #x28 #xae #xd2 #xa6
                                  #xab #xf7 #x15 #x88 #x09 #xcf #x4f #x3c))) 
@@ -147,60 +182,79 @@
                                  #x2d #x98 #x10 #xa3 #x09 #x14 #xdf #xf4)))
               14)
 
-(check-exn exn:fail? (λ () (AES 128 "603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4")))
+;;****************************************************
+; sbox-ref
+(: sbox-ref ((Vectorof Byte) Integer Integer -> Byte))
+; This function allows for the usual matrix-style 
+; referencing into sbox
+(define (sbox-ref v row col)
+  (vector-ref v (+ (* row 16) col)))
 
+;;****************************************************
+; sbox
+(: sbox (Vectorof Byte))
+; Byte matrix used by AES algorithm
 (define sbox 
-  (matrix [[ #x63 #x7c #x77 #x7b #xf2 #x6b #x6f #xc5 #x30 #x01 #x67 #x2b #xfe #xd7 #xab #x76 ] 
-           [ #xca #x82 #xc9 #x7d #xfa #x59 #x47 #xf0 #xad #xd4 #xa2 #xaf #x9c #xa4 #x72 #xc0 ] 
-           [ #xb7 #xfd #x93 #x26 #x36 #x3f #xf7 #xcc #x34 #xa5 #xe5 #xf1 #x71 #xd8 #x31 #x15 ] 
-           [ #x04 #xc7 #x23 #xc3 #x18 #x96 #x05 #x9a #x07 #x12 #x80 #xe2 #xeb #x27 #xb2 #x75 ] 
-           [ #x09 #x83 #x2c #x1a #x1b #x6e #x5a #xa0 #x52 #x3b #xd6 #xb3 #x29 #xe3 #x2f #x84 ] 
-           [ #x53 #xd1 #x00 #xed #x20 #xfc #xb1 #x5b #x6a #xcb #xbe #x39 #x4a #x4c #x58 #xcf ] 
-           [ #xd0 #xef #xaa #xfb #x43 #x4d #x33 #x85 #x45 #xf9 #x02 #x7f #x50 #x3c #x9f #xa8 ] 
-           [ #x51 #xa3 #x40 #x8f #x92 #x9d #x38 #xf5 #xbc #xb6 #xda #x21 #x10 #xff #xf3 #xd2 ] 
-           [ #xcd #x0c #x13 #xec #x5f #x97 #x44 #x17 #xc4 #xa7 #x7e #x3d #x64 #x5d #x19 #x73 ] 
-           [ #x60 #x81 #x4f #xdc #x22 #x2a #x90 #x88 #x46 #xee #xb8 #x14 #xde #x5e #x0b #xdb ] 
-           [ #xe0 #x32 #x3a #x0a #x49 #x06 #x24 #x5c #xc2 #xd3 #xac #x62 #x91 #x95 #xe4 #x79 ] 
-           [ #xe7 #xc8 #x37 #x6d #x8d #xd5 #x4e #xa9 #x6c #x56 #xf4 #xea #x65 #x7a #xae #x08 ] 
-           [ #xba #x78 #x25 #x2e #x1c #xa6 #xb4 #xc6 #xe8 #xdd #x74 #x1f #x4b #xbd #x8b #x8a ] 
-           [ #x70 #x3e #xb5 #x66 #x48 #x03 #xf6 #x0e #x61 #x35 #x57 #xb9 #x86 #xc1 #x1d #x9e ] 
-           [ #xe1 #xf8 #x98 #x11 #x69 #xd9 #x8e #x94 #x9b #x1e #x87 #xe9 #xce #x55 #x28 #xdf ] 
-           [ #x8c #xa1 #x89 #x0d #xbf #xe6 #x42 #x68 #x41 #x99 #x2d #x0f #xb0 #x54 #xbb #x16 ]])) 
+  (vector #x63 #x7c #x77 #x7b #xf2 #x6b #x6f #xc5 #x30 #x01 #x67 #x2b #xfe #xd7 #xab #x76  
+          #xca #x82 #xc9 #x7d #xfa #x59 #x47 #xf0 #xad #xd4 #xa2 #xaf #x9c #xa4 #x72 #xc0  
+          #xb7 #xfd #x93 #x26 #x36 #x3f #xf7 #xcc #x34 #xa5 #xe5 #xf1 #x71 #xd8 #x31 #x15  
+          #x04 #xc7 #x23 #xc3 #x18 #x96 #x05 #x9a #x07 #x12 #x80 #xe2 #xeb #x27 #xb2 #x75  
+          #x09 #x83 #x2c #x1a #x1b #x6e #x5a #xa0 #x52 #x3b #xd6 #xb3 #x29 #xe3 #x2f #x84  
+          #x53 #xd1 #x00 #xed #x20 #xfc #xb1 #x5b #x6a #xcb #xbe #x39 #x4a #x4c #x58 #xcf  
+          #xd0 #xef #xaa #xfb #x43 #x4d #x33 #x85 #x45 #xf9 #x02 #x7f #x50 #x3c #x9f #xa8  
+          #x51 #xa3 #x40 #x8f #x92 #x9d #x38 #xf5 #xbc #xb6 #xda #x21 #x10 #xff #xf3 #xd2  
+          #xcd #x0c #x13 #xec #x5f #x97 #x44 #x17 #xc4 #xa7 #x7e #x3d #x64 #x5d #x19 #x73  
+          #x60 #x81 #x4f #xdc #x22 #x2a #x90 #x88 #x46 #xee #xb8 #x14 #xde #x5e #x0b #xdb  
+          #xe0 #x32 #x3a #x0a #x49 #x06 #x24 #x5c #xc2 #xd3 #xac #x62 #x91 #x95 #xe4 #x79  
+          #xe7 #xc8 #x37 #x6d #x8d #xd5 #x4e #xa9 #x6c #x56 #xf4 #xea #x65 #x7a #xae #x08  
+          #xba #x78 #x25 #x2e #x1c #xa6 #xb4 #xc6 #xe8 #xdd #x74 #x1f #x4b #xbd #x8b #x8a  
+          #x70 #x3e #xb5 #x66 #x48 #x03 #xf6 #x0e #x61 #x35 #x57 #xb9 #x86 #xc1 #x1d #x9e  
+          #xe1 #xf8 #x98 #x11 #x69 #xd9 #x8e #x94 #x9b #x1e #x87 #xe9 #xce #x55 #x28 #xdf 
+          #x8c #xa1 #x89 #x0d #xbf #xe6 #x42 #x68 #x41 #x99 #x2d #x0f #xb0 #x54 #xbb #x16)) 
 
+;;****************************************************
+; inv-sbox
+(: inv-sbox (Vectorof Byte))
+; Inverse of sbox byte matrix used by AES algorithm
 (define inv-sbox 
-  (matrix [[ #x52 #x09 #x6a #xd5 #x30 #x36 #xa5 #x38 #xbf #x40 #xa3 #x9e #x81 #xf3 #xd7 #xfb ] 
-           [ #x7c #xe3 #x39 #x82 #x9b #x2f #xff #x87 #x34 #x8e #x43 #x44 #xc4 #xde #xe9 #xcb ] 
-           [ #x54 #x7b #x94 #x32 #xa6 #xc2 #x23 #x3d #xee #x4c #x95 #x0b #x42 #xfa #xc3 #x4e ] 
-           [ #x08 #x2e #xa1 #x66 #x28 #xd9 #x24 #xb2 #x76 #x5b #xa2 #x49 #x6d #x8b #xd1 #x25 ] 
-           [ #x72 #xf8 #xf6 #x64 #x86 #x68 #x98 #x16 #xd4 #xa4 #x5c #xcc #x5d #x65 #xb6 #x92 ] 
-           [ #x6c #x70 #x48 #x50 #xfd #xed #xb9 #xda #x5e #x15 #x46 #x57 #xa7 #x8d #x9d #x84 ] 
-           [ #x90 #xd8 #xab #x00 #x8c #xbc #xd3 #x0a #xf7 #xe4 #x58 #x05 #xb8 #xb3 #x45 #x06 ] 
-           [ #xd0 #x2c #x1e #x8f #xca #x3f #x0f #x02 #xc1 #xaf #xbd #x03 #x01 #x13 #x8a #x6b ] 
-           [ #x3a #x91 #x11 #x41 #x4f #x67 #xdc #xea #x97 #xf2 #xcf #xce #xf0 #xb4 #xe6 #x73 ] 
-           [ #x96 #xac #x74 #x22 #xe7 #xad #x35 #x85 #xe2 #xf9 #x37 #xe8 #x1c #x75 #xdf #x6e ] 
-           [ #x47 #xf1 #x1a #x71 #x1d #x29 #xc5 #x89 #x6f #xb7 #x62 #x0e #xaa #x18 #xbe #x1b ] 
-           [ #xfc #x56 #x3e #x4b #xc6 #xd2 #x79 #x20 #x9a #xdb #xc0 #xfe #x78 #xcd #x5a #xf4 ] 
-           [ #x1f #xdd #xa8 #x33 #x88 #x07 #xc7 #x31 #xb1 #x12 #x10 #x59 #x27 #x80 #xec #x5f ] 
-           [ #x60 #x51 #x7f #xa9 #x19 #xb5 #x4a #x0d #x2d #xe5 #x7a #x9f #x93 #xc9 #x9c #xef ] 
-           [ #xa0 #xe0 #x3b #x4d #xae #x2a #xf5 #xb0 #xc8 #xeb #xbb #x3c #x83 #x53 #x99 #x61 ] 
-           [ #x17 #x2b #x04 #x7e #xba #x77 #xd6 #x26 #xe1 #x69 #x14 #x63 #x55 #x21 #x0c #x7d ]]))
+  (vector #x52 #x09 #x6a #xd5 #x30 #x36 #xa5 #x38 #xbf #x40 #xa3 #x9e #x81 #xf3 #xd7 #xfb 
+          #x7c #xe3 #x39 #x82 #x9b #x2f #xff #x87 #x34 #x8e #x43 #x44 #xc4 #xde #xe9 #xcb 
+          #x54 #x7b #x94 #x32 #xa6 #xc2 #x23 #x3d #xee #x4c #x95 #x0b #x42 #xfa #xc3 #x4e 
+          #x08 #x2e #xa1 #x66 #x28 #xd9 #x24 #xb2 #x76 #x5b #xa2 #x49 #x6d #x8b #xd1 #x25 
+          #x72 #xf8 #xf6 #x64 #x86 #x68 #x98 #x16 #xd4 #xa4 #x5c #xcc #x5d #x65 #xb6 #x92 
+          #x6c #x70 #x48 #x50 #xfd #xed #xb9 #xda #x5e #x15 #x46 #x57 #xa7 #x8d #x9d #x84 
+          #x90 #xd8 #xab #x00 #x8c #xbc #xd3 #x0a #xf7 #xe4 #x58 #x05 #xb8 #xb3 #x45 #x06 
+          #xd0 #x2c #x1e #x8f #xca #x3f #x0f #x02 #xc1 #xaf #xbd #x03 #x01 #x13 #x8a #x6b 
+          #x3a #x91 #x11 #x41 #x4f #x67 #xdc #xea #x97 #xf2 #xcf #xce #xf0 #xb4 #xe6 #x73 
+          #x96 #xac #x74 #x22 #xe7 #xad #x35 #x85 #xe2 #xf9 #x37 #xe8 #x1c #x75 #xdf #x6e 
+          #x47 #xf1 #x1a #x71 #x1d #x29 #xc5 #x89 #x6f #xb7 #x62 #x0e #xaa #x18 #xbe #x1b 
+          #xfc #x56 #x3e #x4b #xc6 #xd2 #x79 #x20 #x9a #xdb #xc0 #xfe #x78 #xcd #x5a #xf4 
+          #x1f #xdd #xa8 #x33 #x88 #x07 #xc7 #x31 #xb1 #x12 #x10 #x59 #x27 #x80 #xec #x5f 
+          #x60 #x51 #x7f #xa9 #x19 #xb5 #x4a #x0d #x2d #xe5 #x7a #x9f #x93 #xc9 #x9c #xef  
+          #xa0 #xe0 #x3b #x4d #xae #x2a #xf5 #xb0 #xc8 #xeb #xbb #x3c #x83 #x53 #x99 #x61 
+          #x17 #x2b #x04 #x7e #xba #x77 #xd6 #x26 #xe1 #x69 #x14 #x63 #x55 #x21 #x0c #x7d))
 
 
-;rcon is 1-based so the first entry is just a place holder 
+;;****************************************************
+; rcon
+(: rcon (Vectorof (Listof Byte)))
+; Byte matrix used by AES
+; rcon is generally 1-based in the AES details
+; so the first entry is just a place holder
 (define rcon 
-  (list empty             (list #x01 0 0 0) (list #x02 0 0 0) (list #x04 0 0 0)
-        (list #x08 0 0 0) (list #x10 0 0 0) (list #x20 0 0 0) (list #x40 0 0 0)
-        (list #x80 0 0 0) (list #x1B 0 0 0) (list #x36 0 0 0) (list #x6C 0 0 0)
-        (list #xD8 0 0 0) (list #xAB 0 0 0) (list #x4D 0 0 0) (list #x9A 0 0 0)
-        (list #x2F 0 0 0) (list #x5E 0 0 0) (list #xBC 0 0 0) (list #x63 0 0 0)
-        (list #xC6 0 0 0) (list #x97 0 0 0) (list #x35 0 0 0) (list #x6A 0 0 0)
-        (list #xD4 0 0 0) (list #xB3 0 0 0) (list #x7D 0 0 0) (list #xFA 0 0 0)
-        (list #xEF 0 0 0) (list #xC5 0 0 0) (list #x91 0 0 0) (list #x39 0 0 0)
-        (list #x72 0 0 0) (list #xE4 0 0 0) (list #xD3 0 0 0) (list #xBD 0 0 0)
-        (list #x61 0 0 0) (list #xC2 0 0 0) (list #x9F 0 0 0) (list #x25 0 0 0)
-        (list #x4A 0 0 0) (list #x94 0 0 0) (list #x33 0 0 0) (list #x66 0 0 0)
-        (list #xCC 0 0 0) (list #x83 0 0 0) (list #x1D 0 0 0) (list #x3A 0 0 0)
-        (list #x74 0 0 0) (list #xE8 0 0 0) (list #xCB 0 0 0) (list #x8D 0 0 0)))
+  (vector empty             (list #x01 0 0 0) (list #x02 0 0 0) (list #x04 0 0 0)
+          (list #x08 0 0 0) (list #x10 0 0 0) (list #x20 0 0 0) (list #x40 0 0 0)
+          (list #x80 0 0 0) (list #x1B 0 0 0) (list #x36 0 0 0) (list #x6C 0 0 0)
+          (list #xD8 0 0 0) (list #xAB 0 0 0) (list #x4D 0 0 0) (list #x9A 0 0 0)
+          (list #x2F 0 0 0) (list #x5E 0 0 0) (list #xBC 0 0 0) (list #x63 0 0 0)
+          (list #xC6 0 0 0) (list #x97 0 0 0) (list #x35 0 0 0) (list #x6A 0 0 0)
+          (list #xD4 0 0 0) (list #xB3 0 0 0) (list #x7D 0 0 0) (list #xFA 0 0 0)
+          (list #xEF 0 0 0) (list #xC5 0 0 0) (list #x91 0 0 0) (list #x39 0 0 0)
+          (list #x72 0 0 0) (list #xE4 0 0 0) (list #xD3 0 0 0) (list #xBD 0 0 0)
+          (list #x61 0 0 0) (list #xC2 0 0 0) (list #x9F 0 0 0) (list #x25 0 0 0)
+          (list #x4A 0 0 0) (list #x94 0 0 0) (list #x33 0 0 0) (list #x66 0 0 0)
+          (list #xCC 0 0 0) (list #x83 0 0 0) (list #x1D 0 0 0) (list #x3A 0 0 0)
+          (list #x74 0 0 0) (list #xE8 0 0 0) (list #xCB 0 0 0) (list #x8D 0 0 0)))
 
 ;;****************************************************
 ;;******************************************************************************
@@ -208,63 +262,74 @@
 ;;******************************************************************************
 ;;****************************************************
 
-(define (sbox-sub b)
-  (matrix-ref 
+
+;;****************************************************
+; sbox-subst
+(: sbox-subst (Byte -> Byte))
+; performs substitution with the sbox
+(define (sbox-subst b)
+  (sbox-ref 
    sbox
    (bitwise-bit-field b 4 8)
    (bitwise-bit-field b 0 4)))
 
-(check-equal? (sbox-sub #x53) #xed)
-(check-equal? (sbox-sub #x00) #x63)
-(check-equal? (sbox-sub #x6a) #x02)
-(check-equal? (sbox-sub #x4c) #x29)
+(check-equal? (sbox-subst #x53) #xed)
+(check-equal? (sbox-subst #x00) #x63)
+(check-equal? (sbox-subst #x6a) #x02)
+(check-equal? (sbox-subst #x4c) #x29)
 
 
 ;;****************************************************
-; SubBytes (sb) : list-of-bytes -> list-of-bytes
-;;****************************************************
-; takes list of bytes, performs sbox sub
-(define (sb lob)
-  (map sbox-sub lob))
+; sub-bytes
+(: sub-bytes ((Listof Byte) -> (Listof Byte)))
+; a non-linear substitution step where each byte is 
+; replaced with another according to a lookup table.
+(define (sub-bytes lob)
+  (map sbox-subst lob))
 
-(check-equal? (sb '(#x53 #x4c #x13 #xff)) '(#xed #x29 #x7d #x16))
+(check-equal? (sub-bytes '(#x53 #x4c #x13 #xff)) 
+              '(#xed #x29 #x7d #x16))
 
 ;;****************************************************
-; RotWord (rw) : list-of-bytes -> list-of-bytes
-;;****************************************************
+; rotate-word
+(: rotate-word ((Listof Byte) -> (Listof Byte)))
 ; takes list of bytes 4 long, and rotates them cyclicly
-(define (rw lob)
+(define (rotate-word lob)
   (append (rest lob) (list (first lob))))
 
-(check-equal? (rw '(1 2 3 4)) '(2 3 4 1))
+(check-equal? (rotate-word '(1 2 3 4)) '(2 3 4 1))
 
 ;;****************************************************
-; KeyExpansion (ke) : AES -> listof-listof-bytes
-;;****************************************************
-(define (ke aes)
+; key-expand
+(: key-expand (AES -> (Listof Byte)))
+; key expansion defined for AES
+; round keys are derived from the cipher key using 
+; Rijndael's key schedule. AES requires a separate 
+; 128-bit round key block for each round plus one more.
+(define (key-expand aes)
   (define key (AES-key aes))
   (define Nk (AES-Nk aes))
   (define Nr (AES-Nr aes))
   (define w (take key (* 4 Nk)))
-  (word-rev 
-   (for/fold ([expansion (word-rev w)]) 
+  (reverse-words 
+   (for/fold ([expansion (reverse-words w)]) 
      ([i (range Nk (* Nb (add1 Nr)))])
      (let* ([head (nth-word expansion 0)]
             [Nkth (nth-word expansion (sub1 Nk))]
             [temp (cond
                     [(zero? (modulo i Nk))
                      (map bitwise-xor 
-                          (sb (rw head))
-                          (list-ref rcon (quotient i Nk)))]
+                          (sub-bytes (rotate-word head))
+                          (vector-ref rcon (quotient i Nk)))]
                     [(and (> Nk 6) (= 4 (modulo i Nk)))
-                     (sb head)]
+                     (sub-bytes head)]
                     [else
                      head])])
        (append (map bitwise-xor Nkth temp)
                expansion)))))
 
-(check-equal? (ke (AES (list #x2b #x7e #x15 #x16 #x28 #xae #xd2 #xa6
-                             #xab #xf7 #x15 #x88 #x09 #xcf #x4f #x3c)))
+(check-equal? (key-expand (AES (list #x2b #x7e #x15 #x16 #x28 #xae #xd2 #xa6
+                                     #xab #xf7 #x15 #x88 #x09 #xcf #x4f #x3c)))
               (list  #x2b #x7e #x15 #x16 #x28 #xae #xd2 #xa6
                      #xab #xf7 #x15 #x88 #x09 #xcf #x4f #x3c
                      #xa0 #xfa #xfe #x17 #x88 #x54 #x2c #xb1
@@ -288,47 +353,47 @@
                      #xd0 #x14 #xf9 #xa8 #xc9 #xee #x25 #x89
                      #xe1 #x3f #x0c #xc8 #xb6 #x63 #x0c #xa6))
 
-(check-equal? (nth-word (ke (AES (list  #x8e #x73 #xb0 #xf7
-                                        #xda #x0e #x64 #x52 
-                                        #xc8 #x10 #xf3 #x2b
-                                        #x80 #x90 #x79 #xe5 
-                                        #x62 #xf8 #xea #xd2 
-                                        #x52 #x2c #x6b #x7b)))
+(check-equal? (nth-word (key-expand (AES (list  #x8e #x73 #xb0 #xf7
+                                                #xda #x0e #x64 #x52 
+                                                #xc8 #x10 #xf3 #x2b
+                                                #x80 #x90 #x79 #xe5 
+                                                #x62 #xf8 #xea #xd2 
+                                                #x52 #x2c #x6b #x7b)))
                         29)
               (list #xd1 #x9d #xa4 #xe1))
-(check-equal? (nth-word (ke (AES (list  #x8e #x73 #xb0 #xf7
-                                        #xda #x0e #x64 #x52 
-                                        #xc8 #x10 #xf3 #x2b
-                                        #x80 #x90 #x79 #xe5 
-                                        #x62 #xf8 #xea #xd2 
-                                        #x52 #x2c #x6b #x7b)))
+(check-equal? (nth-word (key-expand (AES (list  #x8e #x73 #xb0 #xf7
+                                                #xda #x0e #x64 #x52 
+                                                #xc8 #x10 #xf3 #x2b
+                                                #x80 #x90 #x79 #xe5 
+                                                #x62 #xf8 #xea #xd2 
+                                                #x52 #x2c #x6b #x7b)))
                         50)
               (list #x8e #xcc #x72 #x04))
-(check-equal? (nth-word (ke (AES (list  #x8e #x73 #xb0 #xf7
-                                        #xda #x0e #x64 #x52 
-                                        #xc8 #x10 #xf3 #x2b
-                                        #x80 #x90 #x79 #xe5 
-                                        #x62 #xf8 #xea #xd2 
-                                        #x52 #x2c #x6b #x7b)))
+(check-equal? (nth-word (key-expand (AES (list  #x8e #x73 #xb0 #xf7
+                                                #xda #x0e #x64 #x52 
+                                                #xc8 #x10 #xf3 #x2b
+                                                #x80 #x90 #x79 #xe5 
+                                                #x62 #xf8 #xea #xd2 
+                                                #x52 #x2c #x6b #x7b)))
                         51)
               (list #x01 #x00 #x22 #x02))
 
-(check-equal? (nth-word (ke (AES (list   #x60 #x3d #xeb #x10 #x15 #xca #x71 #xbe
-                                         #x2b #x73 #xae #xf0 #x85 #x7d #x77 #x81
-                                         #x1f #x35 #x2c #x07 #x3b #x61 #x08 #xd7
-                                         #x2d #x98 #x10 #xa3 #x09 #x14 #xdf #xf4)))
+(check-equal? (nth-word (key-expand (AES (list   #x60 #x3d #xeb #x10 #x15 #xca #x71 #xbe
+                                                 #x2b #x73 #xae #xf0 #x85 #x7d #x77 #x81
+                                                 #x1f #x35 #x2c #x07 #x3b #x61 #x08 #xd7
+                                                 #x2d #x98 #x10 #xa3 #x09 #x14 #xdf #xf4)))
                         27)
               (list #xfa #xb8 #xb4 #x64))
-(check-equal? (nth-word (ke (AES (list   #x60 #x3d #xeb #x10 #x15 #xca #x71 #xbe
-                                         #x2b #x73 #xae #xf0 #x85 #x7d #x77 #x81
-                                         #x1f #x35 #x2c #x07 #x3b #x61 #x08 #xd7
-                                         #x2d #x98 #x10 #xa3 #x09 #x14 #xdf #xf4))) 
+(check-equal? (nth-word (key-expand (AES (list   #x60 #x3d #xeb #x10 #x15 #xca #x71 #xbe
+                                                 #x2b #x73 #xae #xf0 #x85 #x7d #x77 #x81
+                                                 #x1f #x35 #x2c #x07 #x3b #x61 #x08 #xd7
+                                                 #x2d #x98 #x10 #xa3 #x09 #x14 #xdf #xf4))) 
                         32)
               (list #x68 #x00 #x7b #xac))
-(check-equal? (nth-word (ke (AES (list   #x60 #x3d #xeb #x10 #x15 #xca #x71 #xbe
-                                         #x2b #x73 #xae #xf0 #x85 #x7d #x77 #x81
-                                         #x1f #x35 #x2c #x07 #x3b #x61 #x08 #xd7
-                                         #x2d #x98 #x10 #xa3 #x09 #x14 #xdf #xf4))) 
+(check-equal? (nth-word (key-expand (AES (list   #x60 #x3d #xeb #x10 #x15 #xca #x71 #xbe
+                                                 #x2b #x73 #xae #xf0 #x85 #x7d #x77 #x81
+                                                 #x1f #x35 #x2c #x07 #x3b #x61 #x08 #xd7
+                                                 #x2d #x98 #x10 #xa3 #x09 #x14 #xdf #xf4))) 
                         59)
               (list #x70 #x6c #x63 #x1e))
 
@@ -340,49 +405,57 @@
 
 
 ;;****************************************************
-; AddRoundKey (ark) : AES box roundkeys -> box
-;;****************************************************
-; 5.1.4
-; roundkeys : expects 4 32 bit integers
-;; (could be revised to be a box as well...)
-(define (ark data roundkey)
+; add-round-key 
+(: add-round-key ((Listof Byte) (Listof Byte) -> (Listof Byte)))
+; each byte of the state is combined with a block of the 
+; round key using bitwise xor.
+(define (add-round-key data roundkey)
   (map bitwise-xor
        data
        roundkey))
 
-;; byte-rc byte-list row column -> byte
-(define (byte-rc bl r c)
+;;****************************************************
+; byte-index 
+(: byte-index ((Listof Byte) Integer Integer -> Byte))
+; Extracts a byte from a list of bytes (representing the
+; box in AES)
+(define (byte-index bl r c)
   (list-ref bl (+ (* 4 c) r)))
+
 ;;****************************************************
-; ShiftRows (sr) : box -> box
-;;****************************************************
-(define (sr data)
-  (list (byte-rc data 0 0) (byte-rc data 1 1) (byte-rc data 2 2) (byte-rc data 3 3)
-        (byte-rc data 0 1) (byte-rc data 1 2) (byte-rc data 2 3) (byte-rc data 3 0)
-        (byte-rc data 0 2) (byte-rc data 1 3) (byte-rc data 2 0) (byte-rc data 3 1)
-        (byte-rc data 0 3) (byte-rc data 1 0) (byte-rc data 2 1) (byte-rc data 3 2)))
+; shift-rows 
+(: shift-rows ((Listof Byte) -> (Listof Byte)))
+; a transposition step where the last three rows of the state 
+; are shifted cyclically a certain number of steps. ("rows" in the
+; AES box the list of bytes represents)
+(define (shift-rows data)
+  (list (byte-index data 0 0) (byte-index data 1 1) (byte-index data 2 2) (byte-index data 3 3)
+        (byte-index data 0 1) (byte-index data 1 2) (byte-index data 2 3) (byte-index data 3 0)
+        (byte-index data 0 2) (byte-index data 1 3) (byte-index data 2 0) (byte-index data 3 1)
+        (byte-index data 0 3) (byte-index data 1 0) (byte-index data 2 1) (byte-index data 3 2)))
 
 
-(check-equal? (sr (list #x00 #x10 #x20 #x30
-                        #x01 #x11 #x21 #x31
-                        #x02 #x12 #x22 #x32
-                        #x03 #x13 #x23 #x33))
+(check-equal? (shift-rows (list #x00 #x10 #x20 #x30
+                                #x01 #x11 #x21 #x31
+                                #x02 #x12 #x22 #x32
+                                #x03 #x13 #x23 #x33))
               (list #x00 #x11 #x22 #x33
                     #x01 #x12 #x23 #x30
                     #x02 #x13 #x20 #x31
                     #x03 #x10 #x21 #x32))
-(check-equal? (sr (list 0 1 2 3
-                        4 5 6 7
-                        8 9 10 11
-                        12 13 14 15))
+(check-equal? (shift-rows (list 0 1 2 3
+                                4 5 6 7
+                                8 9 10 11
+                                12 13 14 15))
               (list 0 5 10 15
                     4 9 14 3
                     8 13 2 7
                     12 1 6 11))
 
 ;;****************************************************
-;; mix-column (mc): list -> list
-;;****************************************************
+;; mc-single
+(: mc-single ((Listof Byte) -> (Listof Byte)))
+; helper for mix columns
 (define (mc-single col)
   (let ([a0 (list-ref col 0)]
         [a1 (list-ref col 1)]
@@ -406,18 +479,22 @@
 (check-equal? (mc-single (list 45 38 49 76)) 
               (list 77 126 189 248))
 
-; MixColumn : list-of-bytes -> list-of-bytes
-; Assuming a 16 byte "box", as defined in AES spec
-(define (mc lob)
+;;****************************************************
+; mix-columns
+(: mix-columns ((Listof Byte) -> (Listof Byte)))
+; a mixing operation which operates on the columns 
+; of the state, combining the four bytes in each column.
+(: mix-columns ((Listof Byte) -> (Listof Byte)))
+(define (mix-columns lob)
   (append (mc-single (nth-word lob 0))
           (mc-single (nth-word lob 1))
           (mc-single (nth-word lob 2))
           (mc-single (nth-word lob 3))))
 
-(check-equal? (mc (list 219 19 83 69
-                        242 10 34 92
-                        1   1  1  1
-                        198 198 198 198))
+(check-equal? (mix-columns (list 219 19 83 69
+                                 242 10 34 92
+                                 1   1  1  1
+                                 198 198 198 198))
               (list 142 77 161 188
                     159 220 88 157
                     1   1   1  1
@@ -431,44 +508,53 @@
 ;;****************************************************
 
 ; helper for cipher (the inner loop workhorse)
+(: aes-round (Integer (Listof Byte) Integer (Listof Byte) -> (Listof Byte)))
 (define (aes-round Nb data round kexp)
-  (ark (mc (sr (sb data)))
-       (sublist kexp 
-                (* 4 (* round Nb)) 
-                (* 4 (* (add1 round) Nb)))))
+  (add-round-key (mix-columns (shift-rows (sub-bytes data)))
+                 (sublist kexp 
+                          (* 4 (* round Nb)) 
+                          (* 4 (* (add1 round) Nb)))))
 
 
 ;;****************************************************
-; AES Encrypt (aes-encrypt) : AES bytearray  -> bytearray
-;;****************************************************
-(define (aes-encrypt aes input)
-  (define kexp (ke aes))
-  (define Nr (AES-Nr aes))
-  (define state (ark input (sublist kexp 0 (* 4 Nb))))
-  (ark (sr (sb (for/fold 
-                   ([data state])
-                 ([round (range 1 Nr)])
-                 (aes-round Nb data round kexp))))
-       (sublist kexp (* 4 (* Nr Nb)) (* 4 (* (add1 Nr) Nb)))))
+; aes-encrypt
+(: aes-encrypt ((Listof Byte) (Listof Byte) -> (Listof Byte)))
+; AES encryption algorithm
+(define (aes-encrypt key input)
+  (define aes (AES key))
+  (define: kexp : (Listof Byte) (key-expand aes))
+  (define: Nr : Integer (AES-Nr aes))
+  (define: initial-state : (Listof Byte) 
+    (add-round-key input (sublist kexp 0 (* 4 Nb))))
+  (define: post-rounds-state : (Listof Byte) 
+    (for/fold: ([data : (Listof Byte) initial-state])
+      ([round : Integer (range 1 Nr)])
+      (aes-round Nb data round kexp)))
+  (define: final-state : (Listof Byte)
+    (add-round-key (shift-rows (sub-bytes post-rounds-state))
+                   (sublist kexp 
+                            (* 4 (* Nr Nb)) 
+                            (* 4 (* (add1 Nr) Nb)))))
+  final-state)
 
 ; 128-bit example
 (check-equal?
  (aes-encrypt
-  (AES (0x "000102030405060708090a0b0c0d0e0f"))
+  (0x "000102030405060708090a0b0c0d0e0f")
   (0x "00112233445566778899aabbccddeeff"))
  (0x "69c4e0d86a7b0430d8cdb78070b4c55a"))
 
 ; 192-bit example
 (check-equal?
  (aes-encrypt
-  (AES (0x "000102030405060708090a0b0c0d0e0f1011121314151617"))
+  (0x "000102030405060708090a0b0c0d0e0f1011121314151617")
   (0x "00112233445566778899aabbccddeeff"))
  (0x "dda97ca4864cdfe06eaf70a0ec0d7191"))
 
 ; 256-bit example
 (check-equal?
  (aes-encrypt 
-  (AES (0x "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"))
+  (0x "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
   (0x "00112233445566778899aabbccddeeff"))
  (0x "8ea2b7ca516745bfeafc49904b496089"))
 
@@ -478,70 +564,75 @@
 ;;******************************************************************************
 ;;****************************************************
 
-; inv-sbox-sub : substitutes through inverse sbox (AES)
-(define (inv-sbox-sub b)
-  (matrix-ref 
+;;****************************************************
+; inv-sbox-subst
+(: inv-sbox-subst (Byte -> Byte))
+; substitutes through inverse sbox values
+(define (inv-sbox-subst b)
+  (sbox-ref 
    inv-sbox
    (bitwise-bit-field b 4 8)
    (bitwise-bit-field b 0 4)))
 
-(check-equal? (inv-sbox-sub #x74) #xca)
-(check-equal? (inv-sbox-sub 0) #x52)
-(check-equal? (inv-sbox-sub #xe1) #xe0)
+(check-equal? (inv-sbox-subst #x74) #xca)
+(check-equal? (inv-sbox-subst 0) #x52)
+(check-equal? (inv-sbox-subst #xe1) #xe0)
+
 
 ;;****************************************************
-; InvSubBytes (sb) : list-of-bytes -> list-of-bytes
-;;****************************************************
-; takes list of bytes, performs sbox sub
-(define (inv-sb lob)
-  (map inv-sbox-sub lob))
+; inv-sub-bytes
+(: inv-sub-bytes ((Listof Byte) -> (Listof Byte)))
+; takes list of bytes, performs inverse sbox sub
+(define (inv-sub-bytes lob)
+  (map inv-sbox-subst lob))
 
-(check-equal? (inv-sb (list #x13 #xee #x29))
+(check-equal? (inv-sub-bytes (list #x13 #xee #x29))
               (list #x82 #x99 #x4c))
 
 
 ;;****************************************************
-; InvShiftRows (rw) : list-of-bytes -> list-of-bytes
-;;****************************************************
+; inv-shift-rows
+(: inv-shift-rows ((Listof Byte) -> (Listof Byte)))
 ; takes list of bytes 4 long, and rotates them cyclicly
-(define (inv-sr data)
-  (list (byte-rc data 0 0)
-        (byte-rc data 1 3)
-        (byte-rc data 2 2)
-        (byte-rc data 3 1)
-        (byte-rc data 0 1)
-        (byte-rc data 1 0)
-        (byte-rc data 2 3)
-        (byte-rc data 3 2)
-        (byte-rc data 0 2)
-        (byte-rc data 1 1)
-        (byte-rc data 2 0)
-        (byte-rc data 3 3)
-        (byte-rc data 0 3)
-        (byte-rc data 1 2)
-        (byte-rc data 2 1)
-        (byte-rc data 3 0)))
+(define (inv-shift-rows data)
+  (list (byte-index data 0 0)
+        (byte-index data 1 3)
+        (byte-index data 2 2)
+        (byte-index data 3 1)
+        (byte-index data 0 1)
+        (byte-index data 1 0)
+        (byte-index data 2 3)
+        (byte-index data 3 2)
+        (byte-index data 0 2)
+        (byte-index data 1 1)
+        (byte-index data 2 0)
+        (byte-index data 3 3)
+        (byte-index data 0 3)
+        (byte-index data 1 2)
+        (byte-index data 2 1)
+        (byte-index data 3 0)))
 
-(check-equal? (inv-sr (sr (list #x00 #x10 #x20 #x30
-                                #x01 #x11 #x21 #x31
-                                #x02 #x12 #x22 #x32
-                                #x03 #x13 #x23 #x33)))
+(check-equal? (inv-shift-rows (shift-rows (list #x00 #x10 #x20 #x30
+                                                #x01 #x11 #x21 #x31
+                                                #x02 #x12 #x22 #x32
+                                                #x03 #x13 #x23 #x33)))
               (list #x00 #x10 #x20 #x30
                     #x01 #x11 #x21 #x31
                     #x02 #x12 #x22 #x32
                     #x03 #x13 #x23 #x33))
-(check-equal? (inv-sr (sr (list 0 1 2 3
-                                4 5 6 7
-                                8 9 10 11
-                                12 13 14 15)))
+(check-equal? (inv-shift-rows (shift-rows (list 0 1 2 3
+                                                4 5 6 7
+                                                8 9 10 11
+                                                12 13 14 15)))
               (list 0 1 2 3
                     4 5 6 7
                     8 9 10 11
                     12 13 14 15))
 
 ;;****************************************************
-; InvMixColumns-sing (rw) : list-of-bytes -> list-of-bytes
-;;****************************************************
+; inv-mc-single 
+(: inv-mc-single ((Listof Byte) -> (Listof Byte)))
+; inv-mix-columns helper
 (define (inv-mc-single col)
   (let ([a0 (list-ref col 0)]
         [a1 (list-ref col 1)]
@@ -565,18 +656,20 @@
 (check-equal? (inv-mc-single (mc-single (list 45 38 49 76))) 
               (list 45 38 49 76))
 
-; InvMixColumn : list-of-bytes -> list-of-bytes
-; Assuming a 16 byte "box", as defined in AES spec
-(define (inv-mc lob)
+;;****************************************************
+; inv-mc-single
+(: inv-mix-columns ((Listof Byte) -> (Listof Byte)))
+; inverse of mix-columns
+(define (inv-mix-columns lob)
   (append (inv-mc-single (nth-word lob 0))
           (inv-mc-single (nth-word lob 1))
           (inv-mc-single (nth-word lob 2))
           (inv-mc-single (nth-word lob 3))))
 
-(check-equal? (inv-mc (mc (list 219 19 83 69
-                                242 10 34 92
-                                1   1  1  1
-                                198 198 198 198)))
+(check-equal? (inv-mix-columns (mix-columns (list 219 19 83 69
+                                                  242 10 34 92
+                                                  1   1  1  1
+                                                  198 198 198 198)))
               (list 219 19 83 69
                     242 10 34 92
                     1   1  1  1
@@ -589,46 +682,56 @@
 ;;****************************************************
 
 ; helper for cipher (the inner loop workhorse)
+(: inv-aes-round (Integer (Listof Byte) Integer (Listof Byte) -> (Listof Byte)))
 (define (inv-aes-round Nb data round kexp)
-  (inv-mc (ark (inv-sb (inv-sr data))
-               (sublist kexp 
-                        (* 4 (* round Nb)) 
-                        (* 4 (* (add1 round) Nb))))))
+  (inv-mix-columns 
+   (add-round-key (inv-sub-bytes (inv-shift-rows data))
+                  (sublist kexp 
+                           (* 4 (* round Nb)) 
+                           (* 4 (* (add1 round) Nb))))))
 
 ;;****************************************************
 ; AES Decrypt (aes-decrypt) : AES bytearray  -> bytearray
 ;;****************************************************
-(define (aes-decrypt aes input)
-  (define kexp (ke aes))
+(: aes-decrypt ((Listof Byte) (Listof Byte) -> (Listof Byte)))
+(define (aes-decrypt key input)
+  (define aes (AES key))
+  (define kexp (key-expand aes))
   (define Nr (AES-Nr aes))
-  (define state (ark input (sublist kexp (* 4 Nr Nb) 
-                                    (* 4 Nb (add1 Nr)))))
-  (ark (inv-sb (inv-sr (for/fold 
-                           ([data state])
-                         ([round (reverse (range 1 Nr))])
-                         (inv-aes-round Nb data round kexp))))
-       (sublist kexp 0 (* 4 Nb))))
+  (define initial-state 
+    (add-round-key input (sublist kexp (* 4 Nr Nb) 
+                                  (* 4 Nb (add1 Nr)))))
+  (define post-rounds-state 
+    (for/fold: 
+        ([data : (Listof Byte) initial-state])
+      ([round : Integer (reverse (range 1 Nr))])
+      (inv-aes-round Nb data round kexp)))
+  (define final-state 
+    (add-round-key 
+     (inv-sub-bytes (inv-shift-rows post-rounds-state))
+     (sublist kexp 0 (* 4 Nb))))
+  final-state)
 
 ; 128-bit example
 (check-equal?
- (aes-decrypt (AES (0x "000102030405060708090a0b0c0d0e0f"))
+ (aes-decrypt (0x "000102030405060708090a0b0c0d0e0f")
               (aes-encrypt
-               (AES (0x "000102030405060708090a0b0c0d0e0f"))
+               (0x "000102030405060708090a0b0c0d0e0f")
                (0x "00112233445566778899aabbccddeeff")))
  (0x "00112233445566778899aabbccddeeff"))
 
 ; 192-bit example
 (check-equal?
- (aes-decrypt (AES (0x "000102030405060708090a0b0c0d0e0f1011121314151617"))
+ (aes-decrypt (0x "000102030405060708090a0b0c0d0e0f1011121314151617")
               (aes-encrypt
-               (AES (0x "000102030405060708090a0b0c0d0e0f1011121314151617"))
+               (0x "000102030405060708090a0b0c0d0e0f1011121314151617")
                (0x "00112233445566778899aabbccddeeff")))
  (0x "00112233445566778899aabbccddeeff"))
 
 ; 256-bit example
 (check-equal?
- (aes-decrypt (AES (0x "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"))
+ (aes-decrypt (0x "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
               (aes-encrypt 
-               (AES (0x "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"))
+               (0x "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
                (0x "00112233445566778899aabbccddeeff")))
  (0x "00112233445566778899aabbccddeeff"))
